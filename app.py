@@ -1,103 +1,108 @@
-import ee
-import streamlit as st
+import rasterio
+import numpy as np
 import folium
+from rasterio.plot import reshape_as_image
+import streamlit as st
 from streamlit_folium import st_folium
+from matplotlib.colors import LinearSegmentedColormap
 
-# Initialize Earth Engine
-def initialize_earth_engine():
-    """Initialize Earth Engine with authentication if required."""
-    try:
-        ee.Initialize()
-    except ee.EEException:
-        ee.Authenticate()
-        ee.Initialize()
 
-# Fetch data
+# Load the GeoTIFF file
 @st.cache_data
-def fetch_s5p_data(start_date, end_date, region_bounds):
+def load_tif(file_path):
     """
-    Fetch the S5P dataset for the specified date range and region.
+    Load GeoTIFF data from a local file.
 
     Args:
-        start_date (str): Start date in 'YYYY-MM-DD' format.
-        end_date (str): End date in 'YYYY-MM-DD' format.
-        region_bounds (list): [west, south, east, north] bounds of the region.
+        file_path (str): Path to the GeoTIFF file.
 
     Returns:
-        ee.Image: Processed Earth Engine image.
+        tuple: (data, bounds, profile) where `data` is the raster array,
+               `bounds` are the geographic boundaries, and `profile` is the metadata.
     """
-    region = ee.Geometry.Rectangle(region_bounds)
-    collection = (ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_CO')
-                  .select('CO_column_number_density')
-                  .filterDate(start_date, end_date)
-                  .filterBounds(region)
-                  .reduce(ee.Reducer.mean()))  # Minimize data to a single image
-    return collection, region
+    with rasterio.open(file_path) as src:
+        data = src.read(1)  # Read the first band
+        bounds = src.bounds
+        profile = src.profile
+    return data, bounds, profile
 
-# Visualize dataset on a folium map
-def visualize_data(dataset, region, center_coords, zoom_level=7):
+
+# Normalize data
+def normalize_data(data, min_val=None, max_val=None):
     """
-    Create a Folium map to visualize the dataset.
+    Normalize data to the range [0, 1].
 
     Args:
-        dataset (ee.Image): Processed Earth Engine image.
-        region (ee.Geometry): Region geometry for bounding box.
-        center_coords (list): [latitude, longitude] for map center.
-        zoom_level (int): Initial zoom level of the map.
+        data (numpy.ndarray): Input array.
+        min_val (float, optional): Minimum value for normalization. Defaults to data.min().
+        max_val (float, optional): Maximum value for normalization. Defaults to data.max().
+
+    Returns:
+        numpy.ndarray: Normalized array.
+    """
+    min_val = min_val if min_val is not None else np.nanmin(data)
+    max_val = max_val if max_val is not None else np.nanmax(data)
+    return (data - min_val) / (max_val - min_val)
+
+
+# Visualize the raster data
+def visualize_tif(data, bounds, palette, map_center, zoom_start=7):
+    """
+    Visualize raster data on a Folium map.
+
+    Args:
+        data (numpy.ndarray): Normalized raster data.
+        bounds (tuple): Geographic bounds of the raster (left, bottom, right, top).
+        palette (list): Color palette for visualization.
+        map_center (list): [latitude, longitude] to center the map.
+        zoom_start (int, optional): Initial zoom level. Defaults to 7.
 
     Returns:
         folium.Map: Interactive map object.
     """
-    vis_params = {
-        'min': 0,
-        'max': 0.05,
-        'palette': ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']
-    }
+    # Create a custom color map
+    colormap = LinearSegmentedColormap.from_list("custom_palette", palette)
+    colormap = np.array([colormap(i) for i in range(256)])[:, :3] * 255
+    colormap = colormap.astype(np.uint8)
 
-    # Convert dataset to URL for visualization
-    map_id = ee.Image(dataset).getMapId(vis_params)
-    tile_url = map_id['tile_fetcher'].url_format
+    # Convert data to image
+    img = np.round(normalize_data(data) * 255).astype(np.uint8)
+    img = reshape_as_image(img)
 
-    # Create and configure the Folium map
-    m = folium.Map(location=center_coords, zoom_start=zoom_level)
-    folium.TileLayer(
-        tiles=tile_url,
-        attr='Google Earth Engine',
-        overlay=True,
-        name='S5P CO'
+    # Create Folium map
+    m = folium.Map(location=map_center, zoom_start=zoom_start)
+
+    # Add raster layer
+    folium.raster_layers.ImageOverlay(
+        image=img,
+        bounds=[[bounds.bottom, bounds.left], [bounds.top, bounds.right]],
+        opacity=0.7,
+        name="Raster Data",
     ).add_to(m)
 
-    # Add a simple bounding box to minimize overhead
-    folium.GeoJson(
-        data=region.getInfo(),
-        style_function=lambda x: {'color': 'blue', 'fill': False, 'weight': 0.5}
-    ).add_to(m)
-
+    # Add layer control
     folium.LayerControl().add_to(m)
     return m
 
-# Main Streamlit app
+
+# Streamlit app
 def main():
-    # App title and description
-    st.title("S5P CO Column Density - Kurdistan Region")
-    st.write("Visualizing CO column density over Kurdistan using Sentinel-5P data.")
+    # App title
+    st.title("GeoTIFF Viewer")
+    st.write("Visualize a local GeoTIFF file directly on an interactive map.")
 
-    # Initialize Earth Engine
-    initialize_earth_engine()
+    # File path and parameters
+    file_path = "data/geo.tif"
+    palette = ["black", "blue", "purple", "cyan", "green", "yellow", "red"]  # Custom palette
+    map_center = [36.25, 44.425]  # Approximate center of Kurdistan
 
-    # Define parameters
-    start_date = '2024-12-01'
-    end_date = '2024-12-05'  # Smaller date range for faster testing
-    region_bounds = [42.35, 35.0, 46.5, 37.5]  # [west, south, east, north]
-    center_coords = [36.25, 44.425]  # Map center (latitude, longitude)
+    # Load and visualize the GeoTIFF
+    data, bounds, profile = load_tif(file_path)
+    folium_map = visualize_tif(data, bounds, palette, map_center)
 
-    # Fetch dataset
-    dataset, region = fetch_s5p_data(start_date, end_date, region_bounds)
+    # Display the map in Streamlit
+    st_folium(folium_map, width=800, height=600)
 
-    # Create and display the map
-    folium_map = visualize_data(dataset, region, center_coords)
-    st_folium(folium_map, width=700, height=500)
 
-# Run the app
 if __name__ == "__main__":
     main()
