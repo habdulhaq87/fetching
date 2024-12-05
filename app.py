@@ -7,6 +7,8 @@ import folium
 from matplotlib.colors import LinearSegmentedColormap
 import streamlit as st
 from streamlit_folium import st_folium
+import tempfile
+import os
 
 
 # Load GeoTIFF file
@@ -29,48 +31,18 @@ def normalize_data(data, min_val=None, max_val=None):
 # Create equal-area polygons
 @st.cache_data
 def raster_to_polygons(data, transform, bins):
-    """
-    Convert raster data to polygons grouped by bins.
-
-    Args:
-        data (numpy.ndarray): Input raster data.
-        transform (Affine): Affine transform for raster data.
-        bins (list): List of bin edges for grouping data.
-
-    Returns:
-        geopandas.GeoDataFrame: Polygons with raster value bins.
-    """
-    # Classify data into bins
-    binned_data = np.digitize(data, bins, right=True).astype(np.uint8)  # Ensure dtype is compatible
-
-    # Mask invalid values
+    binned_data = np.digitize(data, bins, right=True).astype(np.uint8)
     mask = ~np.isnan(data)
-
-    # Generate polygons
     shapes_generator = shapes(binned_data, mask=mask, transform=transform)
     polygons = []
     for geom, value in shapes_generator:
         polygons.append({"geometry": shape(geom), "value": int(value)})
-
     return gpd.GeoDataFrame(polygons, crs="EPSG:4326")
 
 
 # Visualize polygons
 def visualize_polygons(gdf, map_center, zoom_start=7):
-    """
-    Visualize polygons on a Folium map.
-
-    Args:
-        gdf (geopandas.GeoDataFrame): GeoDataFrame containing polygons.
-        map_center (list): [latitude, longitude] to center the map.
-        zoom_start (int, optional): Initial zoom level. Defaults to 7.
-
-    Returns:
-        folium.Map: Interactive map object.
-    """
     m = folium.Map(location=map_center, zoom_start=zoom_start)
-
-    # Add polygons to map
     for _, row in gdf.iterrows():
         folium.GeoJson(
             data=row["geometry"].__geo_interface__,
@@ -81,22 +53,36 @@ def visualize_polygons(gdf, map_center, zoom_start=7):
                 "fillOpacity": 0.5,
             },
         ).add_to(m)
-
     return m
 
 
 # Main Streamlit app
 def main():
-    st.title("GeoTIFF to Equal-Area Polygons")
-    st.write("Visualize raster data as equal-area polygons.")
+    st.title("Interactive GeoTIFF to Equal-Area Polygons")
+    st.write("Visualize raster data as equal-area polygons with adjustable parameters.")
 
-    # File path and parameters
-    file_path = "data/geo.tif"
-    bins = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]  # Value bins
-    map_center = [36.25, 44.425]  # Approximate center of Kurdistan
+    # File upload
+    uploaded_file = st.file_uploader("Upload a GeoTIFF file", type=["tif"])
+    if not uploaded_file:
+        st.warning("Please upload a GeoTIFF file to proceed.")
+        return
 
-    # Load data
-    data, bounds, profile = load_tif(file_path)
+    # Temporary file handling
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+    temp_file.write(uploaded_file.read())
+    temp_file.close()
+
+    # Parameters for processing
+    bins_input = st.text_input(
+        "Enter value bins (comma-separated)", "0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0"
+    )
+    bins = list(map(float, bins_input.split(",")))
+    map_center_lat = st.number_input("Map Center Latitude", value=36.25)
+    map_center_lon = st.number_input("Map Center Longitude", value=44.425)
+    zoom_start = st.slider("Map Zoom Level", min_value=1, max_value=18, value=7)
+
+    # Load and process data
+    data, bounds, profile = load_tif(temp_file.name)
     normalized_data = normalize_data(data)
 
     # Create polygons
@@ -105,13 +91,18 @@ def main():
 
     # Visualize polygons
     st.write("Visualizing polygons...")
-    folium_map = visualize_polygons(polygons_gdf, map_center)
+    folium_map = visualize_polygons(polygons_gdf, [map_center_lat, map_center_lon], zoom_start)
     st_folium(folium_map, width=800, height=600)
 
-    # Export to GeoJSON
-    output_file = "data/polygons.geojson"
-    polygons_gdf.to_file(output_file, driver="GeoJSON")
-    st.write(f"Polygons saved to {output_file}")
+    # Export and download GeoJSON
+    output_file = tempfile.NamedTemporaryFile(delete=False, suffix=".geojson")
+    polygons_gdf.to_file(output_file.name, driver="GeoJSON")
+    with open(output_file.name, "rb") as f:
+        st.download_button("Download GeoJSON", f, file_name="polygons.geojson", mime="application/json")
+
+    # Cleanup temporary files
+    os.unlink(temp_file.name)
+    os.unlink(output_file.name)
 
 
 if __name__ == "__main__":
