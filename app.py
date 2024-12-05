@@ -41,7 +41,7 @@ def raster_to_polygons(data, transform, bins):
         geopandas.GeoDataFrame: Polygons with raster value bins.
     """
     # Classify data into bins
-    binned_data = np.digitize(data, bins, right=True)
+    binned_data = np.digitize(data, bins, right=True).astype(np.uint8)  # Ensure dtype is compatible
 
     # Mask invalid values
     mask = ~np.isnan(data)
@@ -92,7 +92,6 @@ def main():
 
     # File path and parameters
     file_path = "data/geo.tif"
-    palette = ["black", "blue", "purple", "cyan", "green", "yellow", "red"]
     bins = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]  # Value bins
     map_center = [36.25, 44.425]  # Approximate center of Kurdistan
 
