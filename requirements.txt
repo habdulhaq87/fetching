@@ -1,4 +1,5 @@
-streamlit
+rasterio
+numpy
 folium
+streamlit
 streamlit-folium
-earthengine-api
