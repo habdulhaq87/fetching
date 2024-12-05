@@ -24,16 +24,17 @@ def fetch_s5p_data(start_date, end_date, region_bounds):
         region_bounds (list): [west, south, east, north] bounds of the region.
 
     Returns:
-        tuple: Mean image of the dataset and the region geometry.
+        ee.Image: Processed Earth Engine image.
     """
     region = ee.Geometry.Rectangle(region_bounds)
     collection = (ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_CO')
                   .select('CO_column_number_density')
                   .filterDate(start_date, end_date)
-                  .filterBounds(region))
-    return collection.mean(), region
+                  .filterBounds(region)
+                  .reduce(ee.Reducer.mean()))  # Minimize data to a single image
+    return collection, region
 
-# Create map visualization
+# Visualize dataset on a folium map
 def visualize_data(dataset, region, center_coords, zoom_level=7):
     """
     Create a Folium map to visualize the dataset.
@@ -66,10 +67,10 @@ def visualize_data(dataset, region, center_coords, zoom_level=7):
         name='S5P CO'
     ).add_to(m)
 
-    # Add region bounding box
+    # Add a simple bounding box to minimize overhead
     folium.GeoJson(
         data=region.getInfo(),
-        style_function=lambda x: {'color': 'blue', 'fill': False}
+        style_function=lambda x: {'color': 'blue', 'fill': False, 'weight': 0.5}
     ).add_to(m)
 
     folium.LayerControl().add_to(m)
@@ -85,8 +86,8 @@ def main():
     initialize_earth_engine()
 
     # Define parameters
-    start_date = '2024-11-01'
-    end_date = '2024-12-05'
+    start_date = '2024-12-01'
+    end_date = '2024-12-05'  # Smaller date range for faster testing
     region_bounds = [42.35, 35.0, 46.5, 37.5]  # [west, south, east, north]
     center_coords = [36.25, 44.425]  # Map center (latitude, longitude)
 
